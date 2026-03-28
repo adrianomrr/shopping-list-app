@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8" />
+  <title>Lista de Compras</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: sans-serif; max-width: 600px; margin: 20px auto; padding: 0 20px; }
+    input, button { padding: 10px; font-size: 16px; margin: 5px 0; }
+    ul { list-style: none; padding: 0; }
+    li { padding: 8px 0; border-bottom: 1px solid #eee; cursor: pointer; }
+    li.checked::before { content: "✅ "; }
+  </style>
+</head>
+<body>
+  <h1>Lista de Compras</h1>
+  <input type="text" id="itemInput" placeholder="O que vais comprar?" />
+  <button onclick="addItem()">Adicionar</button>
+  <ul id="shoppingList"></ul>
+
+  <script>
+    const lsKey = "shoppingItems";
+    const list = document.getElementById("shoppingList");
+
+    function loadItems() {
+      const items = JSON.parse(localStorage.getItem(lsKey) || "[]");
+      list.innerHTML = "";
+      items.forEach((text, i) => {
+        const li = document.createElement("li");
+        if (text.checked) li.classList.add("checked");
+        li.textContent = text.text;
+        li.onclick = () => toggleItem(i);
+        list.appendChild(li);
+      });
+    }
+
+    function addItem() {
+      const input = document.getElementById("itemInput");
+      const text = input.value.trim();
+      if (!text) return;
+      const items = JSON.parse(localStorage.getItem(lsKey) || "[]");
+      items.push({ text, checked: false });
+      localStorage.setItem(lsKey, JSON.stringify(items));
+      loadItems();
+      input.value = "";
+    }
+
+    function toggleItem(index) {
+      const items = JSON.parse(localStorage.getItem(lsKey) || "[]");
+      items[index].checked = !items[index].checked;
+      localStorage.setItem(lsKey, JSON.stringify(items));
+      loadItems();
+    }
+
+    loadItems();
+  </script>
+</body>
+</html>
