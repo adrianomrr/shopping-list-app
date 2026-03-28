@@ -2,47 +2,101 @@
 <html lang="pt">
 <head>
   <meta charset="UTF-8" />
-  <title>Lista de Compras</title>
+  <title>Lista de Compras Pro</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { font-family: sans-serif; max-width: 600px; margin: 20px auto; padding: 0 20px; }
-    input, button { padding: 10px; font-size: 16px; margin: 5px 0; }
+    body { font-family: sans-serif; max-width: 600px; margin: 20px auto; padding: 0 20px; background: #f8f9fa; }
+    h1 { color: #333; text-align: center; }
+    .input-group { display: flex; gap: 10px; margin: 20px 0; }
+    input, select, button { padding: 12px; font-size: 16px; border: 1px solid #ddd; border-radius: 8px; }
+    input, select { flex: 1; }
+    button { background: #4CAF50; color: white; border: none; cursor: pointer; }
+    button:hover { background: #45a049; }
+    .delete-btn { background: #f44336; font-size: 14px; padding: 4px 8px; }
     ul { list-style: none; padding: 0; }
-    li { padding: 8px 0; border-bottom: 1px solid #eee; cursor: pointer; }
+    li { 
+      padding: 15px; margin: 8px 0; 
+      background: white; border-radius: 8px; 
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      display: flex; justify-content: space-between; align-items: center;
+      cursor: pointer;
+    }
+    li.checked { opacity: 0.6; text-decoration: line-through; }
     li.checked::before { content: "✅ "; }
+    .item-info { flex: 1; }
+    .item-qty { font-size: 14px; color: #666; }
+    .empty { text-align: center; color: #999; font-style: italic; }
   </style>
 </head>
 <body>
-  <h1>Lista de Compras</h1>
-  <input type="text" id="itemInput" placeholder="O que vais comprar?" />
-  <button onclick="addItem()">Adicionar</button>
+  <h1>🛒 Lista de Compras Pro</h1>
+  
+  <div class="input-group">
+    <input type="text" id="itemInput" placeholder="O que vais comprar?" />
+    <select id="categorySelect">
+      <option value="">Categoria</option>
+      <option value="fruta">🍎 Fruta</option>
+      <option value="legumes">🥕 Legumes</option>
+      <option value="padaria">🍞 Padaria</option>
+      <option value="laticinios">🥛 Laticínios</option>
+      <option value="carnes">🥩 Carnes</option>
+      <option value="outros">📦 Outros</option>
+    </select>
+    <input type="number" id="qtyInput" placeholder="1" min="1" max="99" style="width: 70px;" />
+    <button onclick="addItem()">➕</button>
+  </div>
+
   <ul id="shoppingList"></ul>
 
   <script>
-    const lsKey = "shoppingItems";
+    const lsKey = "shoppingProItems";
     const list = document.getElementById("shoppingList");
 
     function loadItems() {
       const items = JSON.parse(localStorage.getItem(lsKey) || "[]");
       list.innerHTML = "";
-      items.forEach((text, i) => {
+      
+      if (items.length === 0) {
+        list.innerHTML = '<li class="empty">Lista vazia — adiciona algo!</li>';
+        return;
+      }
+      
+      items.forEach((item, i) => {
         const li = document.createElement("li");
-        if (text.checked) li.classList.add("checked");
-        li.textContent = text.text;
+        if (item.checked) li.classList.add("checked");
+        
+        li.innerHTML = `
+          <div class="item-info">
+            <strong>${item.emoji || ''}${item.text}</strong>
+            <div class="item-qty">${item.qty || 1}x ${item.category || ''}</div>
+          </div>
+          <button class="delete-btn" onclick="deleteItem(${i}); event.stopPropagation();">🗑️</button>
+        `;
+        
         li.onclick = () => toggleItem(i);
         list.appendChild(li);
       });
     }
 
     function addItem() {
-      const input = document.getElementById("itemInput");
-      const text = input.value.trim();
+      const text = document.getElementById("itemInput").value.trim();
+      const category = document.getElementById("categorySelect").value;
+      const qty = parseInt(document.getElementById("qtyInput").value) || 1;
+      
       if (!text) return;
+      
       const items = JSON.parse(localStorage.getItem(lsKey) || "[]");
-      items.push({ text, checked: false });
+      const emoji = category ? document.getElementById("categorySelect").options[document.getElementById("categorySelect").selectedIndex].text.split(' ')[0] : '';
+      
+      items.unshift({ text, category, qty, checked: false, emoji });
       localStorage.setItem(lsKey, JSON.stringify(items));
+      
+      // Limpa inputs
+      document.getElementById("itemInput").value = "";
+      document.getElementById("categorySelect").value = "";
+      document.getElementById("qtyInput").value = "";
+      
       loadItems();
-      input.value = "";
     }
 
     function toggleItem(index) {
@@ -51,6 +105,18 @@
       localStorage.setItem(lsKey, JSON.stringify(items));
       loadItems();
     }
+
+    function deleteItem(index) {
+      const items = JSON.parse(localStorage.getItem(lsKey) || "[]");
+      items.splice(index, 1);
+      localStorage.setItem(lsKey, JSON.stringify(items));
+      loadItems();
+    }
+
+    // Enter para adicionar
+    document.getElementById("itemInput").addEventListener("keypress", function(e) {
+      if (e.key === "Enter") addItem();
+    });
 
     loadItems();
   </script>
