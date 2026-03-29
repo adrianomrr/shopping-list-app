@@ -15,21 +15,16 @@
     .delete-btn { background: #f44336; font-size: 14px; padding: 4px 8px; }
     .sync-bar { display: flex; gap: 10px; margin-bottom: 15px; align-items: center; flex-wrap: wrap; }
     .sync-btn { background: #2196F3; padding: 10px 16px; font-size: 14px; }
-    .sync-btn:hover { background: #1976D2; }
     .clear-btn { background: #FF9800; padding: 10px 16px; font-size: 14px; }
-    .clear-btn:hover { background: #F57C00; }
     .token-btn { background: #9C27B0; padding: 10px 16px; font-size: 14px; }
-    .token-btn:hover { background: #7B1FA2; }
     .status { font-size: 13px; color: #666; flex: 1; text-align: right; }
     .status.ok { color: #4CAF50; }
     .status.err { color: #f44336; }
     ul { list-style: none; padding: 0; }
     li {
-      padding: 15px; margin: 8px 0;
-      background: white; border-radius: 8px;
+      padding: 15px; margin: 8px 0; background: white; border-radius: 8px;
       box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-      display: flex; justify-content: space-between; align-items: center;
-      cursor: pointer;
+      display: flex; justify-content: space-between; align-items: center; cursor: pointer;
     }
     li.checked { opacity: 0.6; text-decoration: line-through; }
     li.checked::before { content: "✅ "; }
@@ -37,19 +32,23 @@
     .item-qty { font-size: 14px; color: #666; }
     .empty { text-align: center; color: #999; font-style: italic; cursor: default; }
     .token-warning { background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 12px; margin-bottom: 15px; font-size: 14px; display: none; }
+    #debugPanel { background: #1e1e1e; color: #00ff00; font-family: monospace; font-size: 12px; padding: 10px; border-radius: 8px; margin-top: 20px; max-height: 200px; overflow-y: auto; display: none; }
+    #debugPanel.visible { display: block; }
+    .debug-btn { background: #555; padding: 8px 12px; font-size: 12px; }
   </style>
 </head>
 <body>
   <h1>🛒 Lista Compras Adriano Azure-Lab</h1>
 
   <div id="tokenWarning" class="token-warning">
-    ⚠️ SAS Token não configurado. Clica em <strong>🔑 Token</strong> para configurar a sincronização com a cloud.
+    ⚠️ SAS Token não configurado. Clica em <strong>🔑 Token</strong> para configurar.
   </div>
 
   <div class="sync-bar">
     <button class="sync-btn" onclick="syncCloud()">☁️ Sync Cloud</button>
     <button class="clear-btn" onclick="clearAll()">🗑️ Limpar Tudo</button>
     <button class="token-btn" onclick="configToken()">🔑 Token</button>
+    <button class="debug-btn" onclick="toggleDebug()">🐛 Debug</button>
     <span id="syncStatus" class="status">Pronto</span>
   </div>
 
@@ -69,34 +68,40 @@
   </div>
 
   <ul id="shoppingList"></ul>
+  <div id="debugPanel"></div>
 
   <script>
-    // ── Configuração Azure ──────────────────────────────────────────
     const STORAGE_ACCOUNT = "labshoppingstorage";
     const TABLE_NAME      = "ShoppingList";
     const PARTITION_KEY   = "USER1";
     const LS_ITEMS_KEY    = "shoppingProItems";
     const LS_TOKEN_KEY    = "azureSasToken";
-
     const BASE_URL = `https://${STORAGE_ACCOUNT}.table.core.windows.net/${TABLE_NAME}`;
 
-    // ── SAS Token (guardado em localStorage, nunca no GitHub) ───────
+    function log(msg, type = "info") {
+      const panel = document.getElementById("debugPanel");
+      const time  = new Date().toLocaleTimeString("pt-PT");
+      const color = type === "err" ? "#ff4444" : type === "ok" ? "#44ff44" : "#00ff00";
+      panel.innerHTML += `<div style="color:${color}">[${time}] ${msg}</div>`;
+      panel.scrollTop = panel.scrollHeight;
+    }
+
+    function toggleDebug() {
+      document.getElementById("debugPanel").classList.toggle("visible");
+    }
+
     function getSasToken() {
       return localStorage.getItem(LS_TOKEN_KEY) || "";
     }
 
     function configToken() {
       const current = getSasToken();
-      const novo = prompt(
-        "Cola aqui o teu SAS Token do Azure (começa com sv=...):\n\n" +
-        (current ? "Token atual já configurado. Cola um novo para substituir." : "Ainda não tens token configurado."),
-        current
-      );
+      const novo = prompt("Cola aqui o teu SAS Token do Azure (começa com sv=...):", current);
       if (novo && novo.trim()) {
-        // Garante que não tem '?' no início
         const token = novo.trim().startsWith("?") ? novo.trim() : "?" + novo.trim();
         localStorage.setItem(LS_TOKEN_KEY, token);
         document.getElementById("tokenWarning").style.display = "none";
+        log("Token guardado: " + token.substring(0, 40) + "...", "ok");
         setStatus("✅ Token guardado!", "ok");
         syncCloud();
       }
@@ -107,14 +112,12 @@
       return `${BASE_URL}${extra}${token}&$format=application/json;odata=nometadata`;
     }
 
-    // ── Status ──────────────────────────────────────────────────────
     function setStatus(msg, type = "") {
       const el = document.getElementById("syncStatus");
       el.textContent = msg;
       el.className = "status " + type;
     }
 
-    // ── Render lista ────────────────────────────────────────────────
     const list = document.getElementById("shoppingList");
 
     function loadItems() {
@@ -139,25 +142,20 @@
       });
     }
 
-    // ── CRUD Local ──────────────────────────────────────────────────
     function addItem() {
       const text     = document.getElementById("itemInput").value.trim();
       const category = document.getElementById("categorySelect").value;
       const qty      = parseInt(document.getElementById("qtyInput").value) || 1;
       if (!text) return;
-
       const sel   = document.getElementById("categorySelect");
       const emoji = category ? sel.options[sel.selectedIndex].text.split(" ")[0] : "";
       const rowKey = "item_" + Date.now();
-
       const items = JSON.parse(localStorage.getItem(LS_ITEMS_KEY) || "[]");
       items.unshift({ rowKey, text, category, qty, checked: false, emoji });
       localStorage.setItem(LS_ITEMS_KEY, JSON.stringify(items));
-
       document.getElementById("itemInput").value      = "";
       document.getElementById("categorySelect").value = "";
       document.getElementById("qtyInput").value       = "";
-
       loadItems();
       cloudUpsertItem(items[0]);
     }
@@ -180,7 +178,7 @@
     }
 
     function clearAll() {
-      if (!confirm("Tens a certeza que queres limpar toda a lista?")) return;
+      if (!confirm("Tens a certeza?")) return;
       const items = JSON.parse(localStorage.getItem(LS_ITEMS_KEY) || "[]");
       localStorage.setItem(LS_ITEMS_KEY, "[]");
       loadItems();
@@ -188,49 +186,39 @@
       setStatus("🗑️ Lista limpa", "ok");
     }
 
-    // ── Azure REST API ──────────────────────────────────────────────
     async function cloudUpsertItem(item) {
       if (!getSasToken()) return;
       try {
-        const url  = buildUrl(`(PartitionKey='${PARTITION_KEY}',RowKey='${item.rowKey}')`);
-        const body = {
-          PartitionKey: PARTITION_KEY,
-          RowKey:       item.rowKey,
-          Text:         item.text,
-          Category:     item.category || "",
-          Qty:          item.qty || 1,
-          Checked:      item.checked,
-          Emoji:        item.emoji || ""
-        };
-        await fetch(url, {
+        const url = buildUrl(`(PartitionKey='${PARTITION_KEY}',RowKey='${item.rowKey}')`);
+        log("PUT → " + url.substring(0, 80) + "...");
+        const res = await fetch(url, {
           method: "PUT",
           headers: {
             "Content-Type": "application/json",
             "Accept":       "application/json;odata=nometadata",
             "x-ms-version": "2020-12-06"
           },
-          body: JSON.stringify(body)
+          body: JSON.stringify({
+            PartitionKey: PARTITION_KEY, RowKey: item.rowKey,
+            Text: item.text, Category: item.category || "",
+            Qty: item.qty || 1, Checked: item.checked, Emoji: item.emoji || ""
+          })
         });
-      } catch (e) {
-        console.warn("Erro ao guardar na cloud:", e);
-      }
+        log("PUT HTTP " + res.status, res.ok ? "ok" : "err");
+        if (!res.ok) { const t = await res.text(); log(t.substring(0, 200), "err"); }
+      } catch (e) { log("PUT erro: " + e.message, "err"); }
     }
 
     async function cloudDeleteItem(rowKey) {
       if (!getSasToken() || !rowKey) return;
       try {
         const url = buildUrl(`(PartitionKey='${PARTITION_KEY}',RowKey='${rowKey}')`);
-        await fetch(url, {
+        const res = await fetch(url, {
           method: "DELETE",
-          headers: {
-            "Accept":            "application/json;odata=nometadata",
-            "x-ms-version":      "2020-12-06",
-            "If-Match":          "*"
-          }
+          headers: { "Accept": "application/json;odata=nometadata", "x-ms-version": "2020-12-06", "If-Match": "*" }
         });
-      } catch (e) {
-        console.warn("Erro ao apagar na cloud:", e);
-      }
+        log("DELETE HTTP " + res.status, res.ok ? "ok" : "err");
+      } catch (e) { log("DELETE erro: " + e.message, "err"); }
     }
 
     async function syncCloud() {
@@ -240,61 +228,47 @@
         return;
       }
       setStatus("🔄 A sincronizar...");
+      const url = buildUrl(`()?$filter=PartitionKey%20eq%20'${PARTITION_KEY}'`);
+      log("GET → " + url.substring(0, 80) + "...");
       try {
-        const url = buildUrl(`()?$filter=PartitionKey%20eq%20'${PARTITION_KEY}'`);
         const res = await fetch(url, {
-          headers: {
-            "Accept":       "application/json;odata=nometadata",
-            "x-ms-version": "2020-12-06"
-          }
+          headers: { "Accept": "application/json;odata=nometadata", "x-ms-version": "2020-12-06" }
         });
-
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
+        log("GET HTTP " + res.status, res.ok ? "ok" : "err");
+        if (!res.ok) {
+          const txt = await res.text();
+          log("Body: " + txt.substring(0, 300), "err");
+          throw new Error(`HTTP ${res.status}`);
+        }
         const data  = await res.json();
         const cloud = data.value || [];
-
+        log("Itens recebidos: " + cloud.length, "ok");
         const items = cloud.map(row => ({
-          rowKey:   row.RowKey,
-          text:     row.Text,
-          category: row.Category,
-          qty:      row.Qty,
-          checked:  row.Checked,
-          emoji:    row.Emoji
+          rowKey: row.RowKey, text: row.Text, category: row.Category,
+          qty: row.Qty, checked: row.Checked, emoji: row.Emoji
         }));
-
-        // Ordena: não comprados primeiro, depois por RowKey (timestamp)
         items.sort((a, b) => {
           if (a.checked !== b.checked) return a.checked ? 1 : -1;
           return b.rowKey.localeCompare(a.rowKey);
         });
-
         localStorage.setItem(LS_ITEMS_KEY, JSON.stringify(items));
         loadItems();
-
-        const now = new Date().toLocaleTimeString("pt-PT");
-        setStatus(`✅ Sync OK às ${now}`, "ok");
+        setStatus(`✅ Sync OK às ${new Date().toLocaleTimeString("pt-PT")}`, "ok");
       } catch (e) {
+        log("ERRO: " + e.message, "err");
         setStatus(`❌ Erro: ${e.message}`, "err");
       }
     }
 
-    // ── Init ────────────────────────────────────────────────────────
     document.getElementById("itemInput").addEventListener("keypress", e => {
       if (e.key === "Enter") addItem();
     });
 
-    // Mostra aviso se não tem token
-    if (!getSasToken()) {
-      document.getElementById("tokenWarning").style.display = "block";
-    }
+    if (!getSasToken()) document.getElementById("tokenWarning").style.display = "block";
 
+    log("App iniciada. Token: " + (getSasToken() ? "✅ presente" : "❌ não configurado"));
     loadItems();
-
-    // Auto-sync a cada 30 segundos
     setInterval(syncCloud, 30000);
-
-    // Sync inicial ao abrir
     syncCloud();
   </script>
 </body>
