@@ -17,6 +17,7 @@
     .sync-btn { background: #2196F3; padding: 10px 16px; font-size: 14px; }
     .clear-btn { background: #FF9800; padding: 10px 16px; font-size: 14px; }
     .token-btn { background: #9C27B0; padding: 10px 16px; font-size: 14px; }
+    .debug-btn { background: #555; padding: 8px 12px; font-size: 12px; }
     .status { font-size: 13px; color: #666; flex: 1; text-align: right; }
     .status.ok { color: #4CAF50; }
     .status.err { color: #f44336; }
@@ -34,7 +35,6 @@
     .token-warning { background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 12px; margin-bottom: 15px; font-size: 14px; display: none; }
     #debugPanel { background: #1e1e1e; color: #00ff00; font-family: monospace; font-size: 12px; padding: 10px; border-radius: 8px; margin-top: 20px; max-height: 200px; overflow-y: auto; display: none; }
     #debugPanel.visible { display: block; }
-    .debug-btn { background: #555; padding: 8px 12px; font-size: 12px; }
   </style>
 </head>
 <body>
@@ -76,8 +76,9 @@
     const PARTITION_KEY   = "USER1";
     const LS_ITEMS_KEY    = "shoppingProItems";
     const LS_TOKEN_KEY    = "azureSasToken";
-    const BASE_URL = `https://${STORAGE_ACCOUNT}.table.core.windows.net/${TABLE_NAME}`;
+    const BASE_URL        = `https://${STORAGE_ACCOUNT}.table.core.windows.net/${TABLE_NAME}`;
 
+    // ── Debug ───────────────────────────────────────────────────────
     function log(msg, type = "info") {
       const panel = document.getElementById("debugPanel");
       const time  = new Date().toLocaleTimeString("pt-PT");
@@ -85,20 +86,21 @@
       panel.innerHTML += `<div style="color:${color}">[${time}] ${msg}</div>`;
       panel.scrollTop = panel.scrollHeight;
     }
-
     function toggleDebug() {
       document.getElementById("debugPanel").classList.toggle("visible");
     }
 
+    // ── Token ───────────────────────────────────────────────────────
     function getSasToken() {
       return localStorage.getItem(LS_TOKEN_KEY) || "";
     }
 
     function configToken() {
       const current = getSasToken();
-      const novo = prompt("Cola aqui o teu SAS Token do Azure (começa com sv=...):", current);
+      const novo = prompt("Cola aqui o teu SAS Token do Azure (sv=...):", current);
       if (novo && novo.trim()) {
-        const token = novo.trim().startsWith("?") ? novo.trim() : "?" + novo.trim();
+        // Guarda SEMPRE sem '?' no início
+        const token = novo.trim().startsWith("?") ? novo.trim().substring(1) : novo.trim();
         localStorage.setItem(LS_TOKEN_KEY, token);
         document.getElementById("tokenWarning").style.display = "none";
         log("Token guardado: " + token.substring(0, 40) + "...", "ok");
@@ -107,17 +109,26 @@
       }
     }
 
-    function buildUrl(extra = "") {
+    // ── URL Builder ─────────────────────────────────────────────────
+    // Constrói: BASE + extra + ? + sasToken + & + queryParams + & + $format
+    function buildUrl(extra = "", queryParams = "") {
       const token = getSasToken();
-      return `${BASE_URL}${extra}${token}&$format=application/json;odata=nometadata`;
+      // Remove '?' se existir no token guardado
+      const tokenClean = token.startsWith("?") ? token.substring(1) : token;
+      const parts = [tokenClean, queryParams, "$format=application/json;odata=nometadata"]
+        .filter(p => p.length > 0)
+        .join("&");
+      return `${BASE_URL}${extra}?${parts}`;
     }
 
+    // ── Status ──────────────────────────────────────────────────────
     function setStatus(msg, type = "") {
       const el = document.getElementById("syncStatus");
       el.textContent = msg;
       el.className = "status " + type;
     }
 
+    // ── Render ──────────────────────────────────────────────────────
     const list = document.getElementById("shoppingList");
 
     function loadItems() {
@@ -142,15 +153,16 @@
       });
     }
 
+    // ── CRUD Local ──────────────────────────────────────────────────
     function addItem() {
       const text     = document.getElementById("itemInput").value.trim();
       const category = document.getElementById("categorySelect").value;
       const qty      = parseInt(document.getElementById("qtyInput").value) || 1;
       if (!text) return;
-      const sel   = document.getElementById("categorySelect");
-      const emoji = category ? sel.options[sel.selectedIndex].text.split(" ")[0] : "";
+      const sel    = document.getElementById("categorySelect");
+      const emoji  = category ? sel.options[sel.selectedIndex].text.split(" ")[0] : "";
       const rowKey = "item_" + Date.now();
-      const items = JSON.parse(localStorage.getItem(LS_ITEMS_KEY) || "[]");
+      const items  = JSON.parse(localStorage.getItem(LS_ITEMS_KEY) || "[]");
       items.unshift({ rowKey, text, category, qty, checked: false, emoji });
       localStorage.setItem(LS_ITEMS_KEY, JSON.stringify(items));
       document.getElementById("itemInput").value      = "";
@@ -186,11 +198,12 @@
       setStatus("🗑️ Lista limpa", "ok");
     }
 
+    // ── Azure REST API ──────────────────────────────────────────────
     async function cloudUpsertItem(item) {
       if (!getSasToken()) return;
       try {
         const url = buildUrl(`(PartitionKey='${PARTITION_KEY}',RowKey='${item.rowKey}')`);
-        log("PUT → " + url.substring(0, 80) + "...");
+        log("PUT → ..." + url.slice(-60));
         const res = await fetch(url, {
           method: "PUT",
           headers: {
@@ -199,9 +212,13 @@
             "x-ms-version": "2020-12-06"
           },
           body: JSON.stringify({
-            PartitionKey: PARTITION_KEY, RowKey: item.rowKey,
-            Text: item.text, Category: item.category || "",
-            Qty: item.qty || 1, Checked: item.checked, Emoji: item.emoji || ""
+            PartitionKey: PARTITION_KEY,
+            RowKey:       item.rowKey,
+            Text:         item.text,
+            Category:     item.category || "",
+            Qty:          item.qty || 1,
+            Checked:      item.checked,
+            Emoji:        item.emoji || ""
           })
         });
         log("PUT HTTP " + res.status, res.ok ? "ok" : "err");
@@ -215,9 +232,14 @@
         const url = buildUrl(`(PartitionKey='${PARTITION_KEY}',RowKey='${rowKey}')`);
         const res = await fetch(url, {
           method: "DELETE",
-          headers: { "Accept": "application/json;odata=nometadata", "x-ms-version": "2020-12-06", "If-Match": "*" }
+          headers: {
+            "Accept":       "application/json;odata=nometadata",
+            "x-ms-version": "2020-12-06",
+            "If-Match":     "*"
+          }
         });
         log("DELETE HTTP " + res.status, res.ok ? "ok" : "err");
+        if (!res.ok) { const t = await res.text(); log(t.substring(0, 200), "err"); }
       } catch (e) { log("DELETE erro: " + e.message, "err"); }
     }
 
@@ -228,11 +250,15 @@
         return;
       }
       setStatus("🔄 A sincronizar...");
-      const url = buildUrl(`()?$filter=PartitionKey%20eq%20'${PARTITION_KEY}'`);
-      log("GET → " + url.substring(0, 80) + "...");
+      // $filter como queryParam separado — token fica SEMPRE no início
+      const url = buildUrl("()", `$filter=PartitionKey%20eq%20'${PARTITION_KEY}'`);
+      log("GET → ..." + url.slice(-80));
       try {
         const res = await fetch(url, {
-          headers: { "Accept": "application/json;odata=nometadata", "x-ms-version": "2020-12-06" }
+          headers: {
+            "Accept":       "application/json;odata=nometadata",
+            "x-ms-version": "2020-12-06"
+          }
         });
         log("GET HTTP " + res.status, res.ok ? "ok" : "err");
         if (!res.ok) {
@@ -244,8 +270,12 @@
         const cloud = data.value || [];
         log("Itens recebidos: " + cloud.length, "ok");
         const items = cloud.map(row => ({
-          rowKey: row.RowKey, text: row.Text, category: row.Category,
-          qty: row.Qty, checked: row.Checked, emoji: row.Emoji
+          rowKey:   row.RowKey,
+          text:     row.Text,
+          category: row.Category,
+          qty:      row.Qty,
+          checked:  row.Checked,
+          emoji:    row.Emoji
         }));
         items.sort((a, b) => {
           if (a.checked !== b.checked) return a.checked ? 1 : -1;
@@ -260,6 +290,7 @@
       }
     }
 
+    // ── Init ────────────────────────────────────────────────────────
     document.getElementById("itemInput").addEventListener("keypress", e => {
       if (e.key === "Enter") addItem();
     });
