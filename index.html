@@ -17,7 +17,6 @@
     .sync-btn { background: #2196F3; padding: 10px 16px; font-size: 14px; }
     .clear-btn { background: #FF9800; padding: 10px 16px; font-size: 14px; }
     .token-btn { background: #9C27B0; padding: 10px 16px; font-size: 14px; }
-    .debug-btn { background: #555; padding: 8px 12px; font-size: 12px; }
     .status { font-size: 13px; color: #666; flex: 1; text-align: right; }
     .status.ok { color: #4CAF50; }
     .status.err { color: #f44336; }
@@ -33,8 +32,6 @@
     .item-qty { font-size: 14px; color: #666; }
     .empty { text-align: center; color: #999; font-style: italic; cursor: default; }
     .token-warning { background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 12px; margin-bottom: 15px; font-size: 14px; display: none; }
-    #debugPanel { background: #1e1e1e; color: #00ff00; font-family: monospace; font-size: 12px; padding: 10px; border-radius: 8px; margin-top: 20px; max-height: 200px; overflow-y: auto; display: none; }
-    #debugPanel.visible { display: block; }
   </style>
 </head>
 <body>
@@ -48,7 +45,6 @@
     <button class="sync-btn" onclick="syncCloud()">☁️ Sync Cloud</button>
     <button class="clear-btn" onclick="clearAll()">🗑️ Limpar Tudo</button>
     <button class="token-btn" onclick="configToken()">🔑 Token</button>
-    <button class="debug-btn" onclick="toggleDebug()">🐛 Debug</button>
     <span id="syncStatus" class="status">Pronto</span>
   </div>
 
@@ -68,7 +64,6 @@
   </div>
 
   <ul id="shoppingList"></ul>
-  <div id="debugPanel"></div>
 
   <script>
     const STORAGE_ACCOUNT = "labshoppingstorage";
@@ -77,18 +72,6 @@
     const LS_ITEMS_KEY    = "shoppingProItems";
     const LS_TOKEN_KEY    = "azureSasToken";
     const BASE_URL        = `https://${STORAGE_ACCOUNT}.table.core.windows.net/${TABLE_NAME}`;
-
-    // ── Debug ───────────────────────────────────────────────────────
-    function log(msg, type = "info") {
-      const panel = document.getElementById("debugPanel");
-      const time  = new Date().toLocaleTimeString("pt-PT");
-      const color = type === "err" ? "#ff4444" : type === "ok" ? "#44ff44" : "#00ff00";
-      panel.innerHTML += `<div style="color:${color}">[${time}] ${msg}</div>`;
-      panel.scrollTop = panel.scrollHeight;
-    }
-    function toggleDebug() {
-      document.getElementById("debugPanel").classList.toggle("visible");
-    }
 
     // ── Token ───────────────────────────────────────────────────────
     function getSasToken() {
@@ -99,21 +82,17 @@
       const current = getSasToken();
       const novo = prompt("Cola aqui o teu SAS Token do Azure (sv=...):", current);
       if (novo && novo.trim()) {
-        // Guarda SEMPRE sem '?' no início
         const token = novo.trim().startsWith("?") ? novo.trim().substring(1) : novo.trim();
         localStorage.setItem(LS_TOKEN_KEY, token);
         document.getElementById("tokenWarning").style.display = "none";
-        log("Token guardado: " + token.substring(0, 40) + "...", "ok");
         setStatus("✅ Token guardado!", "ok");
         syncCloud();
       }
     }
 
     // ── URL Builder ─────────────────────────────────────────────────
-    // Constrói: BASE + extra + ? + sasToken + & + queryParams + & + $format
     function buildUrl(extra = "", queryParams = "") {
       const token = getSasToken();
-      // Remove '?' se existir no token guardado
       const tokenClean = token.startsWith("?") ? token.substring(1) : token;
       const parts = [tokenClean, queryParams, "$format=application/json;odata=nometadata"]
         .filter(p => p.length > 0)
@@ -203,7 +182,6 @@
       if (!getSasToken()) return;
       try {
         const url = buildUrl(`(PartitionKey='${PARTITION_KEY}',RowKey='${item.rowKey}')`);
-        log("PUT → ..." + url.slice(-60));
         const res = await fetch(url, {
           method: "PUT",
           headers: {
@@ -221,9 +199,8 @@
             Emoji:        item.emoji || ""
           })
         });
-        log("PUT HTTP " + res.status, res.ok ? "ok" : "err");
-        if (!res.ok) { const t = await res.text(); log(t.substring(0, 200), "err"); }
-      } catch (e) { log("PUT erro: " + e.message, "err"); }
+        if (!res.ok) console.warn("PUT falhou: HTTP " + res.status);
+      } catch (e) { console.warn("PUT erro:", e.message); }
     }
 
     async function cloudDeleteItem(rowKey) {
@@ -238,9 +215,8 @@
             "If-Match":     "*"
           }
         });
-        log("DELETE HTTP " + res.status, res.ok ? "ok" : "err");
-        if (!res.ok) { const t = await res.text(); log(t.substring(0, 200), "err"); }
-      } catch (e) { log("DELETE erro: " + e.message, "err"); }
+        if (!res.ok) console.warn("DELETE falhou: HTTP " + res.status);
+      } catch (e) { console.warn("DELETE erro:", e.message); }
     }
 
     async function syncCloud() {
@@ -250,9 +226,7 @@
         return;
       }
       setStatus("🔄 A sincronizar...");
-      // $filter como queryParam separado — token fica SEMPRE no início
       const url = buildUrl("()", `$filter=PartitionKey%20eq%20'${PARTITION_KEY}'`);
-      log("GET → ..." + url.slice(-80));
       try {
         const res = await fetch(url, {
           headers: {
@@ -260,15 +234,9 @@
             "x-ms-version": "2020-12-06"
           }
         });
-        log("GET HTTP " + res.status, res.ok ? "ok" : "err");
-        if (!res.ok) {
-          const txt = await res.text();
-          log("Body: " + txt.substring(0, 300), "err");
-          throw new Error(`HTTP ${res.status}`);
-        }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data  = await res.json();
         const cloud = data.value || [];
-        log("Itens recebidos: " + cloud.length, "ok");
         const items = cloud.map(row => ({
           rowKey:   row.RowKey,
           text:     row.Text,
@@ -285,7 +253,6 @@
         loadItems();
         setStatus(`✅ Sync OK às ${new Date().toLocaleTimeString("pt-PT")}`, "ok");
       } catch (e) {
-        log("ERRO: " + e.message, "err");
         setStatus(`❌ Erro: ${e.message}`, "err");
       }
     }
@@ -297,7 +264,6 @@
 
     if (!getSasToken()) document.getElementById("tokenWarning").style.display = "block";
 
-    log("App iniciada. Token: " + (getSasToken() ? "✅ presente" : "❌ não configurado"));
     loadItems();
     setInterval(syncCloud, 30000);
     syncCloud();
