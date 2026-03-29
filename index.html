@@ -7,16 +7,26 @@
   <style>
     body { font-family: sans-serif; max-width: 600px; margin: 20px auto; padding: 0 20px; background: #f8f9fa; }
     h1 { color: #333; text-align: center; }
-    .input-group { display: flex; gap: 10px; margin: 20px 0; }
+    .input-group { display: flex; gap: 10px; margin: 20px 0; flex-wrap: wrap; }
     input, select, button { padding: 12px; font-size: 16px; border: 1px solid #ddd; border-radius: 8px; }
     input, select { flex: 1; }
     button { background: #4CAF50; color: white; border: none; cursor: pointer; }
     button:hover { background: #45a049; }
     .delete-btn { background: #f44336; font-size: 14px; padding: 4px 8px; }
+    .sync-bar { display: flex; gap: 10px; margin-bottom: 15px; align-items: center; flex-wrap: wrap; }
+    .sync-btn { background: #2196F3; padding: 10px 16px; font-size: 14px; }
+    .sync-btn:hover { background: #1976D2; }
+    .clear-btn { background: #FF9800; padding: 10px 16px; font-size: 14px; }
+    .clear-btn:hover { background: #F57C00; }
+    .token-btn { background: #9C27B0; padding: 10px 16px; font-size: 14px; }
+    .token-btn:hover { background: #7B1FA2; }
+    .status { font-size: 13px; color: #666; flex: 1; text-align: right; }
+    .status.ok { color: #4CAF50; }
+    .status.err { color: #f44336; }
     ul { list-style: none; padding: 0; }
-    li { 
-      padding: 15px; margin: 8px 0; 
-      background: white; border-radius: 8px; 
+    li {
+      padding: 15px; margin: 8px 0;
+      background: white; border-radius: 8px;
       box-shadow: 0 2px 4px rgba(0,0,0,0.1);
       display: flex; justify-content: space-between; align-items: center;
       cursor: pointer;
@@ -25,12 +35,24 @@
     li.checked::before { content: "✅ "; }
     .item-info { flex: 1; }
     .item-qty { font-size: 14px; color: #666; }
-    .empty { text-align: center; color: #999; font-style: italic; }
+    .empty { text-align: center; color: #999; font-style: italic; cursor: default; }
+    .token-warning { background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 12px; margin-bottom: 15px; font-size: 14px; display: none; }
   </style>
 </head>
 <body>
   <h1>🛒 Lista Compras Adriano Azure-Lab</h1>
-  
+
+  <div id="tokenWarning" class="token-warning">
+    ⚠️ SAS Token não configurado. Clica em <strong>🔑 Token</strong> para configurar a sincronização com a cloud.
+  </div>
+
+  <div class="sync-bar">
+    <button class="sync-btn" onclick="syncCloud()">☁️ Sync Cloud</button>
+    <button class="clear-btn" onclick="clearAll()">🗑️ Limpar Tudo</button>
+    <button class="token-btn" onclick="configToken()">🔑 Token</button>
+    <span id="syncStatus" class="status">Pronto</span>
+  </div>
+
   <div class="input-group">
     <input type="text" id="itemInput" placeholder="O que vais comprar?" />
     <select id="categorySelect">
@@ -49,76 +71,231 @@
   <ul id="shoppingList"></ul>
 
   <script>
-    const lsKey = "shoppingProItems";
+    // ── Configuração Azure ──────────────────────────────────────────
+    const STORAGE_ACCOUNT = "labshoppingstorage";
+    const TABLE_NAME      = "ShoppingList";
+    const PARTITION_KEY   = "USER1";
+    const LS_ITEMS_KEY    = "shoppingProItems";
+    const LS_TOKEN_KEY    = "azureSasToken";
+
+    const BASE_URL = `https://${STORAGE_ACCOUNT}.table.core.windows.net/${TABLE_NAME}`;
+
+    // ── SAS Token (guardado em localStorage, nunca no GitHub) ───────
+    function getSasToken() {
+      return localStorage.getItem(LS_TOKEN_KEY) || "";
+    }
+
+    function configToken() {
+      const current = getSasToken();
+      const novo = prompt(
+        "Cola aqui o teu SAS Token do Azure (começa com sv=...):\n\n" +
+        (current ? "Token atual já configurado. Cola um novo para substituir." : "Ainda não tens token configurado."),
+        current
+      );
+      if (novo && novo.trim()) {
+        // Garante que não tem '?' no início
+        const token = novo.trim().startsWith("?") ? novo.trim() : "?" + novo.trim();
+        localStorage.setItem(LS_TOKEN_KEY, token);
+        document.getElementById("tokenWarning").style.display = "none";
+        setStatus("✅ Token guardado!", "ok");
+        syncCloud();
+      }
+    }
+
+    function buildUrl(extra = "") {
+      const token = getSasToken();
+      return `${BASE_URL}${extra}${token}&$format=application/json;odata=nometadata`;
+    }
+
+    // ── Status ──────────────────────────────────────────────────────
+    function setStatus(msg, type = "") {
+      const el = document.getElementById("syncStatus");
+      el.textContent = msg;
+      el.className = "status " + type;
+    }
+
+    // ── Render lista ────────────────────────────────────────────────
     const list = document.getElementById("shoppingList");
 
     function loadItems() {
-      const items = JSON.parse(localStorage.getItem(lsKey) || "[]");
+      const items = JSON.parse(localStorage.getItem(LS_ITEMS_KEY) || "[]");
       list.innerHTML = "";
-      
       if (items.length === 0) {
         list.innerHTML = '<li class="empty">Lista vazia — adiciona algo!</li>';
         return;
       }
-      
       items.forEach((item, i) => {
         const li = document.createElement("li");
         if (item.checked) li.classList.add("checked");
-        
         li.innerHTML = `
           <div class="item-info">
-            <strong>${item.emoji || ''}${item.text}</strong>
-            <div class="item-qty">${item.qty || 1}x ${item.category || ''}</div>
+            <strong>${item.emoji || ""}${item.text}</strong>
+            <div class="item-qty">${item.qty || 1}x ${item.category || ""}</div>
           </div>
           <button class="delete-btn" onclick="deleteItem(${i}); event.stopPropagation();">🗑️</button>
         `;
-        
         li.onclick = () => toggleItem(i);
         list.appendChild(li);
       });
     }
 
+    // ── CRUD Local ──────────────────────────────────────────────────
     function addItem() {
-      const text = document.getElementById("itemInput").value.trim();
+      const text     = document.getElementById("itemInput").value.trim();
       const category = document.getElementById("categorySelect").value;
-      const qty = parseInt(document.getElementById("qtyInput").value) || 1;
-      
+      const qty      = parseInt(document.getElementById("qtyInput").value) || 1;
       if (!text) return;
-      
-      const items = JSON.parse(localStorage.getItem(lsKey) || "[]");
-      const emoji = category ? document.getElementById("categorySelect").options[document.getElementById("categorySelect").selectedIndex].text.split(' ')[0] : '';
-      
-      items.unshift({ text, category, qty, checked: false, emoji });
-      localStorage.setItem(lsKey, JSON.stringify(items));
-      
-      // Limpa inputs
-      document.getElementById("itemInput").value = "";
+
+      const sel   = document.getElementById("categorySelect");
+      const emoji = category ? sel.options[sel.selectedIndex].text.split(" ")[0] : "";
+      const rowKey = "item_" + Date.now();
+
+      const items = JSON.parse(localStorage.getItem(LS_ITEMS_KEY) || "[]");
+      items.unshift({ rowKey, text, category, qty, checked: false, emoji });
+      localStorage.setItem(LS_ITEMS_KEY, JSON.stringify(items));
+
+      document.getElementById("itemInput").value      = "";
       document.getElementById("categorySelect").value = "";
-      document.getElementById("qtyInput").value = "";
-      
+      document.getElementById("qtyInput").value       = "";
+
       loadItems();
+      cloudUpsertItem(items[0]);
     }
 
     function toggleItem(index) {
-      const items = JSON.parse(localStorage.getItem(lsKey) || "[]");
+      const items = JSON.parse(localStorage.getItem(LS_ITEMS_KEY) || "[]");
       items[index].checked = !items[index].checked;
-      localStorage.setItem(lsKey, JSON.stringify(items));
+      localStorage.setItem(LS_ITEMS_KEY, JSON.stringify(items));
       loadItems();
+      cloudUpsertItem(items[index]);
     }
 
     function deleteItem(index) {
-      const items = JSON.parse(localStorage.getItem(lsKey) || "[]");
+      const items = JSON.parse(localStorage.getItem(LS_ITEMS_KEY) || "[]");
+      const item  = items[index];
       items.splice(index, 1);
-      localStorage.setItem(lsKey, JSON.stringify(items));
+      localStorage.setItem(LS_ITEMS_KEY, JSON.stringify(items));
       loadItems();
+      cloudDeleteItem(item.rowKey);
     }
 
-    // Enter para adicionar
-    document.getElementById("itemInput").addEventListener("keypress", function(e) {
+    function clearAll() {
+      if (!confirm("Tens a certeza que queres limpar toda a lista?")) return;
+      const items = JSON.parse(localStorage.getItem(LS_ITEMS_KEY) || "[]");
+      localStorage.setItem(LS_ITEMS_KEY, "[]");
+      loadItems();
+      items.forEach(item => cloudDeleteItem(item.rowKey));
+      setStatus("🗑️ Lista limpa", "ok");
+    }
+
+    // ── Azure REST API ──────────────────────────────────────────────
+    async function cloudUpsertItem(item) {
+      if (!getSasToken()) return;
+      try {
+        const url  = buildUrl(`(PartitionKey='${PARTITION_KEY}',RowKey='${item.rowKey}')`);
+        const body = {
+          PartitionKey: PARTITION_KEY,
+          RowKey:       item.rowKey,
+          Text:         item.text,
+          Category:     item.category || "",
+          Qty:          item.qty || 1,
+          Checked:      item.checked,
+          Emoji:        item.emoji || ""
+        };
+        await fetch(url, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            "Accept":       "application/json;odata=nometadata",
+            "x-ms-version": "2020-12-06"
+          },
+          body: JSON.stringify(body)
+        });
+      } catch (e) {
+        console.warn("Erro ao guardar na cloud:", e);
+      }
+    }
+
+    async function cloudDeleteItem(rowKey) {
+      if (!getSasToken() || !rowKey) return;
+      try {
+        const url = buildUrl(`(PartitionKey='${PARTITION_KEY}',RowKey='${rowKey}')`);
+        await fetch(url, {
+          method: "DELETE",
+          headers: {
+            "Accept":            "application/json;odata=nometadata",
+            "x-ms-version":      "2020-12-06",
+            "If-Match":          "*"
+          }
+        });
+      } catch (e) {
+        console.warn("Erro ao apagar na cloud:", e);
+      }
+    }
+
+    async function syncCloud() {
+      if (!getSasToken()) {
+        document.getElementById("tokenWarning").style.display = "block";
+        setStatus("⚠️ Token não configurado", "err");
+        return;
+      }
+      setStatus("🔄 A sincronizar...");
+      try {
+        const url = buildUrl(`()?$filter=PartitionKey%20eq%20'${PARTITION_KEY}'`);
+        const res = await fetch(url, {
+          headers: {
+            "Accept":       "application/json;odata=nometadata",
+            "x-ms-version": "2020-12-06"
+          }
+        });
+
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const data  = await res.json();
+        const cloud = data.value || [];
+
+        const items = cloud.map(row => ({
+          rowKey:   row.RowKey,
+          text:     row.Text,
+          category: row.Category,
+          qty:      row.Qty,
+          checked:  row.Checked,
+          emoji:    row.Emoji
+        }));
+
+        // Ordena: não comprados primeiro, depois por RowKey (timestamp)
+        items.sort((a, b) => {
+          if (a.checked !== b.checked) return a.checked ? 1 : -1;
+          return b.rowKey.localeCompare(a.rowKey);
+        });
+
+        localStorage.setItem(LS_ITEMS_KEY, JSON.stringify(items));
+        loadItems();
+
+        const now = new Date().toLocaleTimeString("pt-PT");
+        setStatus(`✅ Sync OK às ${now}`, "ok");
+      } catch (e) {
+        setStatus(`❌ Erro: ${e.message}`, "err");
+      }
+    }
+
+    // ── Init ────────────────────────────────────────────────────────
+    document.getElementById("itemInput").addEventListener("keypress", e => {
       if (e.key === "Enter") addItem();
     });
 
+    // Mostra aviso se não tem token
+    if (!getSasToken()) {
+      document.getElementById("tokenWarning").style.display = "block";
+    }
+
     loadItems();
+
+    // Auto-sync a cada 30 segundos
+    setInterval(syncCloud, 30000);
+
+    // Sync inicial ao abrir
+    syncCloud();
   </script>
 </body>
 </html>
